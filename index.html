@@ -599,7 +599,7 @@
      ============================================================ */
   var CONCORD_WHATSAPP = '2349111120012';            // +234 911 112 0012 (international format, no +)
   var CONCORD_EMAIL    = 'team@concordswitch.com';
-  var EMAIL_ENDPOINT   = 'https://script.google.com/macros/s/AKfycbxJfiguEg6SSeLTE291toyKG64env6YzGYMinZo0Bi4ZNmJl8glFhx2Bs-BEGWtm2Ka/exec';  // Google Apps Script Web app URL (see apps-script.gs)
+  var EMAIL_ENDPOINT   = 'PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE';  // Google Apps Script Web app URL (see apps-script.gs)
   var MAX_CV_BYTES     = 5 * 1024 * 1024;            // 5MB, matches the form label
 
   function selectCategoryAndScroll(categoryName) {
@@ -692,7 +692,7 @@
     return lines.join('\n');
   }
 
-  function buildWhatsAppText(app, cvFile, emailOk) {
+  function buildWhatsAppText(app, cvFile, emailOk, cvUrl) {
     const lines = [
       '*NEW APPLICATION - Concord Switch Awka Hub*',
       '',
@@ -705,20 +705,22 @@
       '*Student:* ' + app.isStudent + (app.isStudent === 'Yes' && app.school ? ' (' + app.school + ')' : ''),
       '',
       '*Why I want to join:*',
-      app.message
+      app.message.length > 900 ? app.message.slice(0, 900) + '...' : app.message   // keep the wa.me link a safe length
     ];
     if (cvFile) {
-      lines.push('', emailOk
-        ? '*CV:* ' + cvFile.name + ' (sent to ' + CONCORD_EMAIL + ')'
-        : '*CV:* ' + cvFile.name + ' (I will send it here)');
+      if (cvUrl) {
+        lines.push('', '*CV:* ' + cvUrl);   // WhatsApp links cannot carry files, so we send a link to the CV
+      } else {
+        lines.push('', emailOk
+          ? '*CV:* ' + cvFile.name + ' (sent to ' + CONCORD_EMAIL + ')'
+          : '*CV:* ' + cvFile.name + ' (I will send it here)');
+      }
     }
-    let text = lines.join('\n');
-    if (text.length > 1500) { text = text.slice(0, 1500) + '...'; }  // keep the wa.me link a safe length
-    return text;
+    return lines.join('\n');
   }
 
-  function buildWhatsAppUrl(app, cvFile, emailOk) {
-    return 'https://wa.me/' + CONCORD_WHATSAPP + '?text=' + encodeURIComponent(buildWhatsAppText(app, cvFile, emailOk));
+  function buildWhatsAppUrl(app, cvFile, emailOk, cvUrl) {
+    return 'https://wa.me/' + CONCORD_WHATSAPP + '?text=' + encodeURIComponent(buildWhatsAppText(app, cvFile, emailOk, cvUrl));
   }
 
   function buildMailtoUrl(app, cvFile) {
@@ -772,7 +774,7 @@
       if (!res.ok || !data || data.success !== true) {
         throw new Error((data && data.message) || ('Server responded with ' + res.status));
       }
-      return true;
+      return data;
     } finally {
       clearTimeout(timer);
     }
@@ -819,6 +821,15 @@
     box.appendChild(row(info.emailOk, info.emailOk
       ? 'Emailed to ' + CONCORD_EMAIL
       : 'We could not send your email automatically.'));
+    if (info.emailOk && info.confirmationSent) {
+      box.appendChild(row(true, 'A confirmation email was sent to ' + info.applicantEmail + ' (check spam if you do not see it).'));
+    }
+    if (!info.emailOk && info.emailError) {
+      const detail = document.createElement('div');
+      detail.className = 'text-[11px] text-on-surface-variant pl-6 break-words';
+      detail.textContent = 'Reason: ' + info.emailError;
+      box.appendChild(detail);
+    }
     box.appendChild(row(info.waOpened, info.waOpened
       ? 'WhatsApp opened with your application ready to send. Tap Send in WhatsApp to complete it.'
       : 'WhatsApp did not open automatically. Use the button below.'));
@@ -859,14 +870,21 @@
     try { waWindow = window.open('', '_blank'); } catch (_) { waWindow = null; }
 
     let emailOk = false;
+    let emailError = '';
+    let cvUrl = '';
+    let confirmationSent = false;
     try {
-      emailOk = await sendEmail(app, cvFile);
+      const result = await sendEmail(app, cvFile);
+      emailOk = true;
+      cvUrl = (result && result.cvUrl) ? result.cvUrl : '';
+      confirmationSent = !!(result && result.confirmationSent);
     } catch (err) {
       console.error('Email submission failed:', err);
       emailOk = false;
+      emailError = (err && err.message) ? err.message : String(err);
     }
 
-    const waUrl = buildWhatsAppUrl(app, cvFile, emailOk);
+    const waUrl = buildWhatsAppUrl(app, cvFile, emailOk, cvUrl);
     let waOpened = false;
     if (waWindow && !waWindow.closed) {
       try { waWindow.location.href = waUrl; waOpened = true; } catch (_) { waOpened = false; }
@@ -877,6 +895,9 @@
 
     renderDeliveryStatus(banner, {
       emailOk: emailOk,
+      emailError: emailError,
+      confirmationSent: confirmationSent,
+      applicantEmail: app.email,
       waOpened: waOpened,
       waUrl: waUrl,
       mailtoUrl: buildMailtoUrl(app, cvFile)
